@@ -1,0 +1,636 @@
+---
+title: "APTC Auto Re-Enrollment Elimination Analysis Dashboard"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: rows
+    vertical_layout: scroll
+    theme: flatly
+    navbar:
+      - { title: "GitHub", href: "https://github.com/YOUR_USERNAME/YOUR_REPO", align: right, icon: "fa-github" }
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(tidyverse)
+library(leaflet)
+library(plotly)
+library(scales)
+library(sf)
+library(tigris)
+library(htmltools)
+
+options(tigris_use_cache = TRUE)
+
+df <- read_csv("~/Downloads/aptc_clean - aptc_clean.csv.csv")
+
+nat_current       <- sum(df$current_uncomp_spending,       na.rm = TRUE)
+nat_post          <- sum(df$post_policy_uncomp_spending,    na.rm = TRUE)
+nat_change        <- sum(df$change_in_uncomp_spending,      na.rm = TRUE)
+nat_lost          <- sum(df$post_policy_aptc_lost_coverage, na.rm = TRUE)
+nat_uninsured_new <- sum(df$post_policy_aptc_uninsured,     na.rm = TRUE)
+
+us_pop           <- sum(df$state_population, na.rm = TRUE)
+nat_current_rate <- sum(df$current_uninsured_rate    * df$state_population, na.rm = TRUE) / us_pop
+nat_post_rate    <- sum(df$post_policy_uninsured_rate * df$state_population, na.rm = TRUE) / us_pop
+
+states_sf <- states(cb = TRUE, resolution = "20m", year = 2023) %>%
+  filter(!STUSPS %in% c("PR", "VI", "GU", "MP", "AS", "UM")) %>%
+  st_transform(crs = 4326)
+
+map_data <- states_sf %>%
+  left_join(df, by = c("STUSPS" = "state"))
+
+map_colors    <- c("#BEE7B8", "#8DA267", "#5E663D", "#7B2D42")
+legend_breaks <- c(0, 50e6, 200e6, 600e6, 1300e6)
+legend_labels <- c("< $50M", "$50M – $200M", "$200M – $600M", "> $600M")
+legend_colors <- c("#BEE7B8", "#8DA267", "#5E663D", "#7B2D42")
+
+pal_map <- colorBin(
+  palette  = map_colors,
+  domain   = map_data$change_in_uncomp_spending,
+  bins     = legend_breaks,
+  na.color = "#cccccc"
+)
+
+col_current  <- "#5E663D"
+col_increase <- "#7B2D42"
+
+fmt_uncomp <- function(x) {
+  ifelse(abs(x) >= 1e9,
+         paste0("$", round(x / 1e9, 2), "B"),
+         paste0("$", round(x / 1e6, 1), "M"))
+}
+
+popup_html <- paste0(
+  "<b>", map_data$NAME, " (", map_data$STUSPS, ")</b><br/>",
+  "<hr style='margin:4px 0;'>",
+  "<b>Current Uncomp. Care:</b> ",     fmt_uncomp(map_data$current_uncomp_spending),    "<br/>",
+  "<b>Post-Policy Uncomp. Care:</b> ", fmt_uncomp(map_data$post_policy_uncomp_spending), "<br/>",
+  "<b>Increase in Costs:</b> ",        fmt_uncomp(map_data$change_in_uncomp_spending),  "<br/>",
+  "<b>Projected New Uninsured:</b> ",
+  formatC(map_data$post_policy_aptc_uninsured,     format = "d", big.mark = ","), "<br/>",
+  "<b>Coverage Lost:</b> ",
+  formatC(map_data$post_policy_aptc_lost_coverage, format = "d", big.mark = ","), "<br/>",
+  "<b>Current Uninsured Rate:</b> ",
+  round(map_data$current_uninsured_rate    * 100, 1), "%<br/>",
+  "<b>Post-Policy Uninsured Rate:</b> ",
+  round(map_data$post_policy_uninsured_rate * 100, 1), "%"
+)
+```
+
+<style>
+.navbar-nav > li > a > .fa { display: none !important; }
+.navbar { background-color: #6B3A4A !important; border-color: #7B2D42 !important; }
+.navbar .navbar-brand, .navbar-nav > li > a { color: #F5EEF0 !important; }
+.navbar-nav > li.active > a, .navbar-nav > li > a:hover {
+  color: #ffffff !important; background-color: #7B2D42 !important;
+}
+.chart-title {
+  font-size: 1rem !important; color: #333 !important;
+  font-weight: 600 !important; background-color: #f7f7f7 !important;
+  border-bottom: 1px solid #e5e5e5 !important;
+}
+html, body { height: 100%; background-color: #ffffff !important; }
+.tab-content, .tab-pane, .flexdashboard-page { background-color: #ffffff !important; }
+.dashboard-page-wrapper { min-height: 100vh; background-color: #ffffff !important; }
+.section.level2 { background-color: #ffffff !important; }
+.tab-pane:not(.active) { display: none !important; }
+.tab-pane:not(.active) .plotly { visibility: hidden !important; }
+</style>
+
+Home
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r}
+HTML('
+<div style="max-width:1200px; margin:40px auto; padding:0 60px;
+            font-family:\"Source Sans Pro\", sans-serif; color:#1D1D20; line-height:1.85;">
+
+  <h2 style="font-size:2.4rem; font-weight:700; margin-bottom:16px; color:#300204;">
+    What Are APTC Subsidies and What Is Being Proposed About Them?
+  </h2>
+
+  <p style="font-size:1.4rem; margin-bottom:18px;">
+    <strong>Advanced Premium Tax Credits (APTCs)</strong> are federally subsidized
+    payments that reduce monthly health insurance premiums for individuals and families
+    purchasing coverage through the ACA Marketplace. Recipients are generally lower-income
+    adults who earn between 100% and 400% of the federal poverty level. In 2025, approximately
+    14.5 million Americans received APTCs, and roughly half are automatically re-enrolled each year if they do
+    not actively change or drop their plan.
+  </p>
+
+  <p style="font-size:1.4rem; margin-bottom:18px;">
+    The One Big Beautiful Bill Act (OBBBA), currently advancing in Congress, proposes to
+    eliminate automatic re-enrollment for APTC recipients. Under this change, every enrollee
+    would be required to actively re-confirm their coverage each year. Individuals who fail
+    to do so would lose their subsidized coverage at renewal.
+  </p>
+
+  <hr style="border:none; border-top:1px solid #ddd; margin:28px 0;">
+
+  <h3 style="font-size:2.4rem; font-weight:700; margin-bottom:10px; color:#300204;">
+    Research Question
+  </h3>
+  <p style="font-size:1.4rem; margin-bottom:18px;">
+    If automatic re-enrollment for APTC subsidies is eliminated, how many enrollees are
+    projected to lose coverage and what would be the impact on uncompensated care costs
+    for U.S. hospitals and safety-net providers?
+  </p>
+
+  <hr style="border:none; border-top:1px solid #ddd; margin:28px 0;">
+
+  <h3 style="font-size:2.4rem; font-weight:700; margin-bottom:10px; color:#300204;">
+    Data &amp; Methods
+  </h3>
+  <p style="font-size:1.4rem; margin-bottom:18px; color:#444;">
+    Enrollment data are drawn from the CMS 2025 Marketplace Open Enrollment Period Public
+    Use Files. Our analysis is based on uninsured rates from the Kaiser Family Foundation
+    and operates under the assumption that there will be a 33% reduction in re-enrollment
+    following elimination of automatic re-enrollment (Shepard &amp; Wagner, 2025). Of those
+    projected to lose coverage, we assume that 50% of those enrollees will become uninsured
+    (McIntyre et al., 2024). Uncompensated care costs are estimated at $1,230.73 per newly
+    uninsured person per year (Garthwaite et al., 2015) and adjusted to 2026 dollars using
+    the U.S. Bureau of Labor Statistics Inflation Calculator (n&nbsp;=&nbsp;51).
+  </p>
+
+  <hr style="border:none; border-top:1px solid #ddd; margin:28px 0;">
+
+  <h3 style="font-size:2.4rem; font-weight:700; margin-bottom:10px; color:#300204;">
+    Impact Statement: Why This Proposed Change Matters
+  </h3>
+  <p style="font-size:1.4rem; margin-bottom:18px;">
+    While Section 112201 of the One Big Beautiful Bill Act projects $5.45 billion in
+    federal subsidy savings, these gains are more than offset by a projected $6.10 billion
+    increase in annual uncompensated care costs (CMS, 2025). Eliminating automatic
+    re-enrollment introduces an administrative burden that disproportionately harms
+    low-income enrollees and vulnerable populations, ultimately reversing coverage gains
+    achieved under the ACA and destabilizing the broader insurance market through weakened
+    risk pools and higher premiums for all consumers.
+  </p>
+
+  <hr style="border:none; border-top:1px solid #ddd; margin:28px 0;">
+
+  <h3 style="font-size:2.4rem; font-weight:700; margin-bottom:10px; color:#300204;">
+    About This Dashboard
+  </h3>
+  <p style="font-size:1.4rem; margin-bottom:18px;">
+    This dashboard is designed as an interactive policy tool for researchers, lawmakers,
+    advocates, and health system administrators seeking to understand the projected
+    state-level and national impacts of eliminating automatic re-enrollment for APTC
+    recipients. By allowing users to explore projected uninsured rates, uncompensated care
+    costs, coverage loss figures and model how costs shift under alternative uninsured rate
+    assumptions, this dashboard translates complex administrative and fiscal projections
+    into accessible, actionable insights for evidence-based health policy decision making.
+  </p>
+
+  <hr style="border:none; border-top:1px solid #ddd; margin:28px 0;">
+
+  <h3 style="font-size:2.4rem; font-weight:700; margin-bottom:10px; color:#300204;">
+    Sources
+  </h3>
+  <p style="font-size:0.92rem; color:#555; line-height:1.9;">
+    Centers for Medicare &amp; Medicaid Services. (2025). <em>2025 Marketplace Open Enrollment Period Public Use Files.</em> U.S. Department of Health and Human Services. https://www.cms.gov/data-research/statistics-trends-reports/marketplace-products/2025-marketplace-open-enrollment-period-public-use-files
+    <br/><br/>
+    Garthwaite, C., Gross, T., &amp; Notowidigdo, M. J. (2015). <em>Hospitals as insurers of last resort</em> (NBER Working Paper No. 21290). National Bureau of Economic Research. https://www.nber.org/papers/w21290
+    <br/><br/>
+    Kaiser Family Foundation. (2024). <em>State health facts: Total population by insurance status</em> [Data set]. KFF. https://www.kff.org/state-health-policy-data/state-indicator/total-population/
+    <br/><br/>
+    McIntyre, A., Sommers, B. D., Aboulafia, G., Phelan, J., Orav, E. J., Epstein, A. M., &amp; Figueroa, J. F. (2024). Coverage and access changes during Medicaid unwinding. <em>JAMA Health Forum, 5</em>(6), e242193. https://doi.org/10.1001/jamahealthforum.2024.2193
+    <br/><br/>
+    Shepard, M., &amp; Wagner, M. (2025). Do ordeals work for selection markets? Evidence from health insurance auto-enrollment. <em>American Economic Review, 115</em>(3), 772–822. https://doi.org/10.1257/aer.20231133
+    <br/><br/>
+    U.S. Bureau of Labor Statistics. (2026). <em>CPI inflation calculator.</em> U.S. Department of Labor. https://www.bls.gov/data/inflation_calculator.htm
+  </p>
+
+</div>
+')
+```
+
+
+About the Data
+=====================================
+
+Row
+-------------------------------------
+
+###
+
+```{r}
+HTML('
+<div style="max-width:1200px; margin:40px auto; padding:0 60px;
+            font-family:\"Source Sans Pro\", sans-serif; color:#1D1D20; line-height:1.85;">
+
+  <h2 style="font-size:2.4rem; font-weight:700; margin-bottom:20px; color:#300204;">
+    Dataset Description
+  </h2>
+
+  <p style="font-size:1.3rem; margin-bottom:16px;">
+    Data are sourced from the <strong>Centers for Medicare &amp; Medicaid Services (CMS)
+    Open Enrollment Public Use Files</strong> for plan year 2025, available at
+    <a href="https://data.healthcare.gov" target="_blank">data.healthcare.gov</a>.
+  </p>
+
+  <p style="font-size:1.3rem; margin-bottom:16px;">
+    The dataset covers all 50 U.S. states and the District of Columbia
+    (n&nbsp;=&nbsp;51 state-level observations) and reflects ACA Marketplace enrollment
+    activity during the 2025 open enrollment period.
+  </p>
+
+  <p style="font-size:1.3rem; margin-bottom:16px;">
+    Data were compiled from administrative enrollment records reported by CMS and
+    supplemented with author calculations using a per-person uncompensated care cost
+    estimate of $1,230.73, derived from Dranove et al. (2015), NBER Working Paper
+    No.&nbsp;21290.
+  </p>
+
+  <p style="font-size:1.3rem; margin-bottom:16px;">
+    The study population consists of ACA Marketplace enrollees receiving Advanced Premium
+    Tax Credits (APTCs), with a specific focus on those enrolled through automatic
+    re-enrollment across all states for plan year 2025.
+  </p>
+
+  <p style="font-size:1.3rem; color:#444;">
+    Post-policy projections simulate the elimination of automatic re-enrollment for APTC
+    recipients as proposed under the One Big Beautiful Bill Act (OBBBA); it is assumed
+    that 50% of individuals who lose APTC-subsidized coverage transition to uninsured
+    status.
+  </p>
+
+</div>
+')
+```
+
+Row
+-------------------------------------
+
+### State-Level Data
+
+```{r}
+library(DT)
+
+df_table <- df %>%
+  select(
+    State                        = state,
+    `Total Consumers`            = total_consumers,
+    `APTC Recipients`            = aptc_consumers,
+    `% Receiving APTC`           = pct_aptc,
+    `Auto Re-enrollees`          = auto_reenrollees,
+    `% Auto Re-enrolled`         = pct_auto_reenroll,
+    `Coverage Lost`              = post_policy_aptc_lost_coverage,
+    `Projected New Uninsured`    = post_policy_aptc_uninsured,
+    `Current Uninsured Rate`     = current_uninsured_rate,
+    `Post-Policy Uninsured Rate` = post_policy_uninsured_rate,
+    `Current Uncomp. Care`       = current_uncomp_spending,
+    `Post-Policy Uncomp. Care`   = post_policy_uncomp_spending,
+    `Increase in Uncomp. Care`   = change_in_uncomp_spending
+  ) %>%
+  mutate(
+    `% Receiving APTC`           = paste0(round(`% Receiving APTC` * 100, 1), "%"),
+    `% Auto Re-enrolled`         = paste0(round(`% Auto Re-enrolled` * 100, 1), "%"),
+    `Current Uninsured Rate`     = paste0(round(`Current Uninsured Rate` * 100, 1), "%"),
+    `Post-Policy Uninsured Rate` = paste0(round(`Post-Policy Uninsured Rate` * 100, 1), "%"),
+    `Current Uncomp. Care`       = dollar(`Current Uncomp. Care`, scale = 1e-6, suffix = "M", accuracy = 0.1),
+    `Post-Policy Uncomp. Care`   = dollar(`Post-Policy Uncomp. Care`, scale = 1e-6, suffix = "M", accuracy = 0.1),
+    `Increase in Uncomp. Care`   = dollar(`Increase in Uncomp. Care`, scale = 1e-6, suffix = "M", accuracy = 0.1)
+  )
+
+datatable(
+  df_table,
+  rownames   = FALSE,
+  filter     = "none",
+  extensions = "Buttons",
+  options    = list(
+    pageLength = 15,
+    dom        = "Bfrtip",
+    buttons    = list("csv"),
+    scrollX    = TRUE,
+    columnDefs = list(list(className = "dt-center", targets = "_all"))
+  )
+)
+```
+
+
+National Level Map
+=====================================
+
+Row {data-height=90}
+-------------------------------------
+
+###
+
+```{r}
+HTML(paste0('
+<div style="display:flex; gap:32px; padding:14px 24px; flex-wrap:wrap;
+            font-family:\"Source Sans Pro\", sans-serif; color:#1D1D20;">
+
+  <div style="flex:1; min-width:200px;">
+    <div style="font-size:1.6rem; font-weight:700; color:#1D1D20;">$',
+      round(nat_change / 1e9, 2), 'B</div>
+    <div style="font-size:1rem; color:#444;">
+      Projected National Increase in Uncompensated Care Costs
+    </div>
+  </div>
+
+  <div style="flex:1; min-width:200px;">
+    <div style="font-size:1.6rem; font-weight:700; color:#1D1D20;">',
+      formatC(nat_uninsured_new, format="d", big.mark=","), '</div>
+    <div style="font-size:1rem; color:#444;">
+      Projected New Uninsured Americans
+    </div>
+  </div>
+
+  <div style="flex:1; min-width:200px;">
+    <div style="font-size:1.6rem; font-weight:700; color:#1D1D20;">',
+      formatC(nat_lost, format="d", big.mark=","), '</div>
+    <div style="font-size:1rem; color:#444;">
+      APTC Recipients Projected to Lose Coverage
+    </div>
+  </div>
+
+</div>
+'))
+```
+
+Row {data-height=520}
+-------------------------------------
+
+### Projected Increase in Uncompensated Care by State — Click a State for Details
+
+```{r}
+leaflet(map_data,
+        options = leafletOptions(minZoom = 3, maxZoom = 8)) %>%
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  setView(lng = -96, lat = 38, zoom = 4) %>%
+  addPolygons(
+    fillColor    = ~pal_map(change_in_uncomp_spending),
+    fillOpacity  = 0.85,
+    color        = "white",
+    weight       = 1,
+    smoothFactor = 0.5,
+    popup        = popup_html,
+    highlight    = highlightOptions(
+      weight       = 2.5,
+      color        = "#333",
+      fillOpacity  = 0.95,
+      bringToFront = TRUE
+    ),
+    label = ~paste0(STUSPS, ": ", fmt_uncomp(change_in_uncomp_spending)),
+    labelOptions = labelOptions(
+      style     = list("font-weight" = "bold", "font-size" = "12px"),
+      textsize  = "12px",
+      direction = "auto"
+    )
+  ) %>%
+  addLegend(
+    colors   = legend_colors,
+    labels   = legend_labels,
+    title    = "Increase in Uncomp. Care",
+    position = "bottomright",
+    opacity  = 0.85
+  )
+```
+
+Row
+-------------------------------------
+
+### Implications
+
+```{r}
+HTML('
+<div style="padding:16px 24px; font-family:\"Source Sans Pro\", sans-serif;
+            color:#1D1D20; font-size:1.1rem; line-height:1.8;">
+  <p>
+    Based on this figure, it is evident that eliminating automatic re-enrollment is projected
+    to raise the uninsured rate in every state without exception — a decrease is not possible
+    under this provision, as no state gains enrollees from the elimination of automatic
+    re-enrollment. Notably, the largest increases are concentrated in the South and critically,
+    are states that have not expanded Medicaid, meaning their safety-net infrastructure is
+    already strained and residents have fewer coverage alternatives when Marketplace enrollment
+    lapses further. When looking at the state-level fiscal burden, several states face
+    uncompensated care increases in the hundreds of millions to billions of dollars on their own,
+    with Florida projected to absorb the largest single-state increase. These disparities carry
+    significant equity implications: the communities projected to lose the most coverage are
+    disproportionately low-income, already underserved, and located in states with the least
+    robust safety-net systems to absorb the resulting uncompensated care burden.
+  </p>
+</div>
+')
+```
+
+Row {data-height=120}
+-------------------------------------
+
+###
+
+```{r}
+HTML('
+<div style="padding:10px 24px; font-family:\"Source Sans Pro\", sans-serif;
+            font-size:0.82rem; color:#888; border-top:1px solid #e5e5e5;">
+  <i>
+    Centers for Medicare &amp; Medicaid Services. (2025). <em>2025 Marketplace Open Enrollment Period Public Use Files.</em> U.S. Department of Health and Human Services. &nbsp;|&nbsp;
+    Garthwaite, C., Gross, T., &amp; Notowidigdo, M. J. (2015). <em>Hospitals as insurers of last resort</em> (NBER Working Paper No. 21290). National Bureau of Economic Research. https://www.nber.org/papers/w21290 &nbsp;|&nbsp;
+    Kaiser Family Foundation. (2024). <em>State health facts: Total population by insurance status</em> [Data set]. KFF. https://www.kff.org/state-health-policy-data/state-indicator/total-population/ &nbsp;|&nbsp;
+    U.S. Bureau of Labor Statistics. (2026). <em>CPI inflation calculator.</em> U.S. Department of Labor. https://www.bls.gov/data/inflation_calculator.htm &nbsp;|&nbsp;
+    Author Calculations.
+  </i>
+</div>
+')
+```
+
+
+Uncompensated Care Costs
+=====================================
+
+Row {data-height=500}
+-------------------------------------
+
+### Predicted Total U.S. Uncompensated Care Cost
+
+```{r}
+nat_bar <- data.frame(
+  category = c("Current Costs", "Increase in Costs"),
+  value    = c(nat_current, nat_change),
+  label    = c(
+    paste0("$", round(nat_current / 1e9, 2), "B"),
+    paste0("$", round(nat_change  / 1e9, 2), "B")
+  )
+)
+
+plot_ly(
+  nat_bar,
+  x                = ~"United States",
+  y                = ~value,
+  type             = "bar",
+  color            = ~category,
+  colors           = c("Current Costs" = col_current, "Increase in Costs" = col_increase),
+  text             = ~label,
+  textposition     = "inside",
+  insidetextanchor = "middle",
+  textfont         = list(color = "white", size = 16, family = "Arial Black"),
+  hovertemplate    = "<b>%{fullData.name}</b><br>$%{y:,.0f}<extra></extra>"
+) %>%
+  layout(
+    barmode = "stack",
+    title   = list(text = "<b>Predicted Total U.S. Uncompensated Care Cost</b>",
+                   font = list(size = 14)),
+    xaxis  = list(title = ""),
+    yaxis  = list(title = "Uncompensated Care Costs ($)", tickformat = "$,.0s"),
+    legend = list(orientation = "v", x = 1.02, y = 0.5),
+    margin = list(t = 60, b = 90),
+    annotations = list(list(
+      x = 0, y = -0.26, xref = "paper", yref = "paper",
+      text      = "<i>Source: CMS, 2025; Author Calculations</i>",
+      showarrow = FALSE,
+      font      = list(size = 10, color = "gray")
+    ))
+  )
+```
+
+### Uninsured Rate Scenario Explorer {data-width=420}
+
+```{r}
+HTML(paste0('
+<div style="padding:20px; font-family:\"Source Sans Pro\", sans-serif; color:#1D1D20;">
+
+  <p style="font-size:0.95rem; color:#444; line-height:1.65; margin-bottom:18px;">
+    Enter a hypothetical national uninsured rate to explore how uncompensated care costs
+    would change. The <strong>current rate</strong> is
+    <strong>', round(nat_current_rate * 100, 2), '%</strong> and the
+    <strong>projected post-policy rate</strong> is
+    <strong>', round(nat_post_rate * 100, 2), '%</strong>.
+  </p>
+
+  <label for="rateInput" style="font-weight:600; font-size:0.95rem;">
+    Hypothetical National Uninsured Rate (%):
+  </label><br/>
+  <input
+    type="number"
+    id="rateInput"
+    value="', round(nat_post_rate * 100, 2), '"
+    min="0" max="50" step="0.1"
+    style="margin-top:8px; padding:6px 10px; font-size:1rem; width:130px;
+           border:1px solid #ccc; border-radius:4px;"
+    oninput="updateCalc()"
+  />
+
+  <div id="calcResults" style="margin-top:20px; margin-bottom:20px;"></div>
+
+  <div style="font-weight:600; font-size:0.9rem; margin-bottom:8px; color:#555;">
+    Hypothetical Cost Breakdown
+  </div>
+  <div style="display:flex; align-items:center; gap:16px;">
+    <div style="display:flex; flex-direction:column; align-items:center; width:140px;">
+      <div style="font-size:0.78rem; color:#555; margin-bottom:4px;" id="hypoLabel">—</div>
+      <div id="barContainer" style="width:100%; height:150px; border:1px solid #ddd; border-radius:3px; overflow:hidden; display:flex; flex-direction:column; justify-content:flex-end;">
+        <div id="hypoChange" style="background:#7B2D42; width:100%; height:0px;"></div>
+        <div id="hypoBase"   style="background:#5E663D; width:100%; height:0px;"></div>
+      </div>
+      <div style="font-size:0.75rem; color:#555; margin-top:5px;">Hypothetical</div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:8px; font-size:0.82rem; color:#555;">
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:14px; height:14px; background:#7B2D42; border-radius:2px; flex-shrink:0;"></div>
+        <span>Increase in Costs</span>
+      </div>
+      <div style="display:flex; align-items:center; gap:6px;">
+        <div style="width:14px; height:14px; background:#5E663D; border-radius:2px; flex-shrink:0;"></div>
+        <span>Current Costs</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+var usPop         = ', us_pop, ';
+var currentUncomp = ', round(nat_current, 2), ';
+var costPerPerson = 1230.73;
+
+function fmtAbs(x) {
+  if (Math.abs(x) >= 1e9) return "$" + (x / 1e9).toFixed(2) + "B";
+  return "$" + (x / 1e6).toFixed(1) + "M";
+}
+function fmtDiff(x) {
+  var sign = x >= 0 ? "+" : "\u2212";
+  var a = Math.abs(x);
+  if (a >= 1e9) return sign + "$" + (a / 1e9).toFixed(2) + "B";
+  return sign + "$" + (a / 1e6).toFixed(1) + "M";
+}
+
+function updateCalc() {
+  var raw = parseFloat(document.getElementById("rateInput").value);
+  var el  = document.getElementById("calcResults");
+  if (isNaN(raw) || raw < 0 || raw > 50) {
+    el.innerHTML = "<span style=\'color:#c0392b; font-size:0.9rem;\'>Please enter a value between 0 and 50.</span>";
+    return;
+  }
+  var hypoRate      = raw / 100;
+  var hypoUninsured = Math.round(usPop * hypoRate);
+  var hypoUncomp    = usPop * hypoRate * costPerPerson;
+  var diff          = hypoUncomp - currentUncomp;
+  var pct           = (diff / currentUncomp) * 100;
+  var col = diff >= 0 ? "#7B2D42" : "#5E663D";
+
+  var rows = [
+    ["Hypothetical uninsured rate",  raw.toFixed(2) + "%",                        "#1D1D20"],
+    ["Projected uninsured (U.S.)",   hypoUninsured.toLocaleString(),               "#1D1D20"],
+    ["Projected uncomp. care costs", fmtAbs(hypoUncomp),                           "#1D1D20"],
+    ["Change vs. current costs",     fmtDiff(diff),                                 col],
+    ["% change in uncomp. spending", (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%", col]
+  ];
+
+  var html = "<table style=\'width:100%; border-collapse:collapse; font-size:0.9rem;\'>";
+  rows.forEach(function(r, i) {
+    var border = i === 3 ? " border-top:1px solid #ddd;" : "";
+    html += "<tr><td style=\'padding:5px 4px; color:#666;" + border + "\'>" + r[0] + "</td>" +
+            "<td style=\'padding:5px 4px; font-weight:700; text-align:right; color:" + r[2] + ";" + border + "\'>" + r[1] + "</td></tr>";
+  });
+  html += "</table>";
+  el.innerHTML = html;
+
+  var totalBar    = Math.max(currentUncomp * 1.5, hypoUncomp);
+  var barH        = 150;
+  var basePx      = Math.round((Math.min(currentUncomp, hypoUncomp) / totalBar) * barH);
+  var changePx    = Math.round((Math.abs(diff) / totalBar) * barH);
+  var changeColor = diff >= 0 ? "#7B2D42" : "#BEE7B8";
+
+  document.getElementById("hypoLabel").textContent         = fmtAbs(hypoUncomp);
+  document.getElementById("hypoBase").style.height         = basePx + "px";
+  document.getElementById("hypoChange").style.height       = changePx + "px";
+  document.getElementById("hypoChange").style.background   = changeColor;
+}
+updateCalc();
+</script>
+'))
+```
+
+Row
+-------------------------------------
+
+### Implications
+
+```{r}
+HTML('
+<div style="padding:16px 24px; font-family:\"Source Sans Pro\", sans-serif;
+            color:#1D1D20; font-size:1.1rem; line-height:1.8;">
+  <p>
+    The elimination of automatic re-enrollment for APTC recipients is projected to increase
+    total U.S. uncompensated care costs by $6.10 billion annually — a 17.6% rise above the
+    current national burden of $34.56 billion (Garthwaite et al., 2015; U.S. Bureau of Labor
+    Statistics, 2026; Author Calculations). Because uncompensated care scales directly with
+    the number of uninsured individuals seeking care without coverage, a policy that raises
+    the uninsured rate by even one percentage point translates into billions of dollars in
+    additional costs absorbed by hospitals, safety-net providers, and ultimately, insured
+    consumers through higher premiums. Use the scenario explorer to the right to see how
+    projected uncompensated care costs shift under different hypothetical uninsured rates —
+    the steep dollar changes across even small rate adjustments illustrate just how
+    consequential coverage loss is at a population level.
+  </p>
+</div>
+')
+```
