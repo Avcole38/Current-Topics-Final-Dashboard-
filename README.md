@@ -1,7 +1,7 @@
 # APTC Auto Re-Enrollment Elimination Analysis Dashboard
 This dashboard analyzes the potential change in uninsurance and fiscal consequences of the proposed policy to eliminate APTC auto reenrollment 
 
-# Live Dashboard
+## Live Dashboard
 https://avcole38.github.io/Current-Topics-Final-Dashboard-/
 
 # Topic Overview
