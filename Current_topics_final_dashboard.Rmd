@@ -6,7 +6,7 @@ output:
     vertical_layout: scroll
     theme: flatly
     navbar:
-      - { title: "GitHub", href: "https://github.com/YOUR_USERNAME/YOUR_REPO", align: right, icon: "fa-github" }
+
 ---
 
 ```{r setup, include=FALSE}
